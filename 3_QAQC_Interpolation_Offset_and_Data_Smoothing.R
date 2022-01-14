@@ -29,6 +29,8 @@
 #               -5000. These is now a check against this, and values are reset to -9999 after interpolation.
 #
 # July 6, 2020: Removed the creation of .KML and .SHP files from this script, and made that portion of the process into script 4b.
+# Aug 20, 2021: Added if() statement to check if the manual beacon tracking script has been run, before trying to interpolate from this data source. If
+#               this script has not been run, skip this portion.
 #=====================================================================================================
 
 #Check if necessary packages are present, install as required.
@@ -51,7 +53,11 @@ require(geosphere)
 
 #########################################EDIT THESE DATA################################################################
 
-#Specify offsets for Ship GPS source. If more than one GPS is used, specify both sources independtely. Offset to the port side are 
+#Project folder name 
+
+project_folder <- "~/Projects/June2021_BOOTS_Cruise_PAC2021_036"
+
+#Specify offsets for Ship GPS source. If more than one GPS is used, specify both sources independentely. Offset to the port side are 
 #positive values for 'GPS_abeam' and offset towards the bow are positive for 'GPS_along'.
 
 GPS_abeam <- 6.6
@@ -59,24 +65,38 @@ GPS_along <- -21.13
 
 #Set working directory for location of Hypack .RAW files
 
-Hypack_input <- "~/Projects/July2019_BOOTS Cruise_PAC2019_014/Data/Hypack Backup/Raw"
+Hypack_input <- paste0(project_folder,"/Data/Hypack_Backup/Raw")
 
 #Directory for processed dives
 
-processed_dir <- "~/Projects/July2019_BOOTS Cruise_PAC2019_014/Data/Processed_Data"
+processed_dir <- paste0(project_folder, "/Data/Processed_Data")
 
 #Set a directory for the location of the Dive Log
 
-Log_path <- "~/Projects/July2019_BOOTS Cruise_PAC2019_014/Data/Dive Logs"
+Log_path <- paste0(project_folder,"/Data/Dive_Logs")
 
 #Path for ASDL Master Log files
 
-Master_ASDL <- "~/Projects/July2019_BOOTS Cruise_PAC2019_014/Data/ASDL/Full_Cruise"
+Master_ASDL <- paste0(project_folder, "/Data/ASDL/Full_Cruise")
 
 
 #Path for final exports
 
-final_dir <- "~/Projects/July2019_BOOTS Cruise_PAC2019_014/Data/Final Exports"
+final_dir <- paste0(project_folder,"/Data/Final_Exports")
+
+#Vector of directories to check for
+
+dirs <- c(Hypack_input, processed_dir, Log_path, Master_ASDL, final_dir)
+
+#Check and create directories as needed.
+
+for(i in unique(dirs))
+{
+  if(dir.exists(i) == FALSE)
+  {
+    dir.create(i, recursive = TRUE)
+  }
+}
 
 
 ############################READ IN THE DIVE LOG AND BOOTS STRING #################################
@@ -123,17 +143,20 @@ for(i in unique(Dives))
   fill$Beacon_Lat[temporary1] <- Position_to_fill$Lat[index]  #The Lat from the BOOTS_string
   fill$Position_Source[temporary1] <- Position_to_fill$ID[index]
 
-#Next, check and see if better position data can be retrieved from the BOOTS transponder, fill it in if possible.
+#Next, check and see if better position data can be retrieved from the manual tracking of the main beacon from data output by TrackMan, 
+#fill it in if possible. This code block checks to see if a Manual Tracking Master data frame exists before trying to execute.
   
-  Tracking_to_fill <- get("Manual_Tracking_Master")
-  index <- match(temporary2, Tracking_to_fill$date_time)
-  swap <- which(!is.na(index))
-  if(length(swap) != 0)
-  {fill$Beacon_Long[temporary1] <- Tracking_to_fill$Beacon_Long[swap] 
-  fill$Beacon_Lat[temporary1] <- Tracking_to_fill$Beacon_Lat[swap]  
-  fill$Position_Source[temporary1] <- Tracking_to_fill$ID[swap]
+if(exists("Manual_Tracking_Master") == TRUE)
+  {
+    Tracking_to_fill <- get("Manual_Tracking_Master")
+    index <- match(temporary2, Tracking_to_fill$date_time)
+    swap <- which(!is.na(index))
+    if(length(swap) != 0)
+    {fill$Beacon_Long[temporary1] <- Tracking_to_fill$Beacon_Long[swap] 
+    fill$Beacon_Lat[temporary1] <- Tracking_to_fill$Beacon_Lat[swap]  
+    fill$Position_Source[temporary1] <- Tracking_to_fill$ID[swap]
+    }
   }
-  
   
 #Same process for the BOOTS heading, but data could be missing from different index locations. Create new index locator variables, specific to heading parameter
   

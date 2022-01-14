@@ -1,10 +1,10 @@
 #=====================================================================================================
 # Script Name: Append SeaBird CTD data to NAV Export
-# Script Function: Reads in SeaBird CTD data that has been converted from a .HEX file to a .CNV file, using the SeaBird data processsing
+# Script Function: Reads in SeaBird CTD data that has been converted from a .HEX file to a .ASC file, using the SeaBird data processsing
 #                 program. The program then reads in the Hypack NAV files and then searches for matches amongst the timestamps of the
-#                  SeaBird data set and, when found, appends these data to the NAV export data writes the merged data to new .CSV files.
+#                  SeaBird data set and, when found, appends these data to the NAV export data then writes the merged data to new .CSV files.
 #
-#                 In the event that the .HEX file cannot be located, the program searches for backup data in the ASDL log files, and appends these
+#                 In the event that the .ASC file cannot be located, the program searches for backup data in the ASDL log files, and appends these
 #                 data to the missing record.
 #
 # Script Author: Ben Snow
@@ -17,9 +17,8 @@
 ######################################################################################################
 #
 # May 13, 2020: Added a loop (lines 108-129) to check to see if CTD data was missing from any files, if so new loop 
-#               will attempt to retrieve missing data from ASDL and will fill in missing records if possible
-#               Note that this process will not provide Dissolved Oxygen Concentration of Density Anomaly data, as
-#               these are calculated in Ruskin. May be possible to manually calculate these and add at a later date.
+#               will attempt to retrieve missing data from ASDL and will fill in missing records if possible.
+# Aug 21, 2021: Removed the Descent_rate and Data_Flag columns from the SBE25+ exports.
 #
 #=====================================================================================================
 
@@ -37,23 +36,44 @@ require(readr)
 require(dplyr)
 
 
-################################################# EDIT THESE VALUES ##################################
+################################################# EDIT THESE VALUES ###################################
+
+#Project folder name 
+
+project_folder <- "~/Projects/June2021_BOOTS_Cruise_PAC2021_036"
+
+###########################################CHECK FOR AND GENERATE DIRECTORIES##########################
+
 
 #Set working directory for location of SeaBird .ASC files exported from SeaBird data processing program.
 
-SBE_input <- "~/Projects/July2019_BOOTS Cruise_PAC2019_014/Data/SBE25"
+SBE_input <- paste0(project_folder, "/Data/SBE25")
 
 #Set working directory for the ASDL SBE_Master, in case data needs to be recoverd
 
-Master_ASDL <- "~/Projects/July2019_BOOTS Cruise_PAC2019_014/Data/ASDL/Full_Cruise"
+Master_ASDL <- paste0(project_folder,"/Data/ASDL/Full_Cruise") 
 
 #Set working directory for location of smoothed .CSV files from the Hypack Export
 
-NAV_input <- "~/Projects/July2019_BOOTS Cruise_PAC2019_014/Data/Final Exports"
+NAV_input <- paste0(project_folder, "/Data/Final_Exports")
 
 #Set a path for saving data exported at the end of this script
 
-save_path <- "~/Projects/July2019_BOOTS Cruise_PAC2019_014/Data/NAV_with_CTD"
+save_path <- paste0(project_folder, "/Data/NAV_with_CTD")
+
+#Vector of directories to check for
+
+dirs <- c(SBE_input, Master_ASDL, NAV_input, save_path)
+
+#Check and create directories as needed.
+
+for(i in unique(dirs))
+{
+  if(dir.exists(i) == FALSE)
+  {
+    dir.create(i, recursive = TRUE)
+  }
+}
 
 ####################################READ IN SBE DATA FROM .ASC FILES####################################
 
@@ -81,9 +101,9 @@ for(i in 1:length(SBE_files))
 
 SBE_merged$date_time <- mdy_hms(paste0(SBE_merged$`mm/dd/yyyy`,"_",SBE_merged$`hh:mm:ss`))
 
-#Drop, the date, time and Depth columns
+#Drop, the date, time and Depth, Descent Rate, and Data_Flag columns
 
-SBE_merged <- SBE_merged[,c(15,6:14)]
+SBE_merged <- SBE_merged[,c(15,6:12)]
 
 ######################################READ IN THE DATA FROM NAV FILES#########################################
 
@@ -113,7 +133,7 @@ for(k in 1:length(NAV_files))
 
 #Check to see if there are NA values in any of the SBE WQ data that was appended to the NAV files in the left_join() from
 #the previous loop. If NAs are present, it may mean that the data was not saved as a .ASC file, or that SeaSave crashed during the dive, or during export 
-#during the export. If this is the case, data may still be recoverable from the ADSL records. Check the SBE_Master file created by 
+#If this is the case, data may still be recoverable from the ADSL records. Check the SBE_Master file created by 
 #'2_ASDL Data Parser_Phantom.R' to see if backup data can be found. If backup data is present, fill in the NA values with this data.
 
 
@@ -136,12 +156,11 @@ for(j in 1:length(NAV_files))
   
   fill$T090C[temp1] <- SBE_to_fill$Temp_C[index]
   fill$`C0mS/cm`[temp1] <- SBE_to_fill$Conductivity_msCm[index]
-  fill$Density00[temp1] <- SBE_to_fill$Density_kg_m[index]
   fill$Sal00[temp1] <- SBE_to_fill$Salinity_PSU[index]
   fill$SvWM[temp1] <- SBE_to_fill$SoundVelocity_Wilson[index]
   fill$`OxsatML/L`[temp1] <- SBE_to_fill$Ox_Sat_mlL[index]
   fill$Sbeox0PS[temp1] <- SBE_to_fill$SBE43_02Conc[index]
-  fill$Flag[temp1] <- SBE_to_fill$Data_Flag[index]
+
   
   assign(NAV_files[j], fill)
 }
@@ -149,14 +168,14 @@ for(j in 1:length(NAV_files))
 #Rewrite the columns names, start with the names saved from the NAV file import earlier in this script.
 
 full_names <- c(names, "Temperature_C","Conductivity_mScm","Density_kg_m3","Salinity_PSU","SoundVelocity_ms",
-                "Ox_Sat_mlL","SBE43_02Conc","Descent_rate_ms","Data_Flag")
+                "Ox_Sat_mlL","SBE43_02Conc")
 
-for(h in 1:length(NAV_files))
-{
-  temp <- get(NAV_files[h])
-  names(temp) <- full_names
-  assign(NAV_files[h], temp)
-}
+ for(h in 1:length(NAV_files))
+ {
+   temp <- get(NAV_files[h])
+   names(temp) <- full_names
+   assign(NAV_files[h], temp)
+ }
 
 #Write new .CSV files for each of the data frames with merged data in it.
 

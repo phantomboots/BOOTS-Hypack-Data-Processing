@@ -21,7 +21,12 @@
 #
 # May 29, 2020: Changed out of range values for Tritech PA500 altimeter 0f 0, 49.997 and 50m (MiniZeus Slant Range)
 #               and Imagenex Altimeter (Altitude) value of 0 and 0.44 m to -9999, instead of N/A
-#
+# Apr 23, 2021: Set options(digits = 12), to make sure that Lat/Long with many sig figures are displayed as expected. Added in explicit number of columns to 
+#               read for Hemisphere_position, ROWETech DVL and RBR log files. read_delim scans the first rows to determine the appropriate number of columns for the
+#               parsed data, these devices can have variable numbers of columns when parsed from comma delimited format. Setting number of columns explicitly via 
+#               col_names = paste0("X", seq_len(...)), where ... is the explicitly stated number of columns, will control for this.
+# Aug 21, 2021: New subsection to parse the fixed width data records output from the SBE25+ during real time viewing. This section also reduce the data records to 
+#               the standard 1 Hz data resolution used in all other exports.
 #=====================================================================================================
 
 #Check for the presence of packages shown below, install any packages that are missing
@@ -39,22 +44,42 @@ require(stringr)
 require(imputeTS)
 require(measurements) #Required to convert Hemisphere GPS from Deg/Decimal mins to Decimal degrees.
 
+#Force display of long digit numbers
+
+options(digits = 12)
+
 ########################################EDIT THESE DATA ##############################################
 
-#Set working directory, wherever the Advanced Serial data logger text file are saved.
+#Project folder name 
 
-ASDL_dir <- "~/Projects/July2019_BOOTS Cruise_PAC2019_014/Data/ASDL"
-setwd(ASDL_dir)
+project_folder <- "~/Projects/June2021_BOOTS_Cruise_PAC2021_036"
+
+#Directory where the ASDL files are stored
+ASDL_dir <- paste0(project_folder, "/Data/ASDL")
 
 #Set the directory for saving of the master files.
+save_dir <- paste0(project_folder, "/Data/ASDL/Full_Cruise")
 
-save_dir <- "~/Projects/July2019_BOOTS Cruise_PAC2019_014/Data/ASDL/Full_Cruise"
+#Vector of directories to check for
 
-#Directory for the SBE25 data in .asc (text) file format.
+dirs <- c(ASDL_dir, save_dir)
 
-SBE_dir <- "~/Projects/July2019_BOOTS Cruise_PAC2019_014/Data/SBE25"
+#Check and create directories as needed.
+
+for(i in unique(dirs))
+{
+  if(dir.exists(i) == FALSE)
+  {
+    dir.create(i, recursive = TRUE)
+  }
+}
+
+#Set working directory, wherever the Advanced Serial data logger text file are saved.
+setwd(ASDL_dir)
+
 
 ##########################READ IN THE BOOTS STRINGS FROM ASDL#########################################
+
 
 BOOTS_string_files <- list.files(ASDL_dir, pattern = "BOOTS_String")
 
@@ -194,8 +219,8 @@ write.csv(Tritech_all, paste(save_dir,"Tritech_SlantRange_MasterLog.csv", sep ="
 
 Imagenex_files <- list.files(ASDL_dir, pattern = "Imagenex")
 
-if(length(Imagenex_files) != 0)
-{
+#if(length(Imagenex_files) != 0)
+#{
 
 for(i in 1:length(Imagenex_files))
 {
@@ -262,7 +287,7 @@ for(i in 1:length(MiniZeus_ZFA_files))
   rm(list = c(i))
 }
 
-#Remove and rows with NA values. Choose any column to search for NA values.
+#Remove any rows with NA values. Choose any column to search for NA values.
 
 MiniZeus_ZFA_all <- filter(MiniZeus_ZFA_all, !is.na(X2))
 
@@ -298,51 +323,60 @@ write.csv(MiniZeus_ZFA_all, paste(save_dir,"MiniZeus_ZFA_MasterLog.csv", sep = "
 
 Hemisphere_GPS_files <- list.files(ASDL_dir, pattern = "Hemisphere_GPS")
 
-if(length(Hemisphere_GPS_files) !=  0)
-{
+#if(length(Hemisphere_GPS_files) !=  0)
+#{
 
-for(i in 1:length(Hemisphere_GPS_files))
-{
-  name <- as.character(i)
-  assign(name, read_delim(Hemisphere_GPS_files[i], col_names = F, delim = ",", skip = 1, col_types = cols(X1 = "c", X2 = "c", X3 = "c",
-                          X4 = "c", X5 = "c", X6 = "c", X7 = "c", X8 = "c", X9 = "c", X10 = "c", X11 = "c", X12 = "c", X13 = "c",
-                          X14 = "c", X15 = "c")))
-  if(name == "1")
-  {Hemisphere_GPS_all <- get(name)
-  }else Hemisphere_GPS_all <- bind_rows(Hemisphere_GPS_all, get(name))
-  rm(list = c(i))
-}
+  for(i in 1:length(Hemisphere_GPS_files))
+  {
+    name <- as.character(i)
+    assign(name, read_delim(Hemisphere_GPS_files[i], col_names = F, delim = ";", col_types = cols(X1 = "c")))
+    if(name == "1")
+    {Hemisphere_GPS_all <- get(name)
+    }else Hemisphere_GPS_all <- bind_rows(Hemisphere_GPS_all, get(name))
+    rm(list = c(i))
+  }
 
-#Filter out the ASDL timestamps, don't need them here since $GPZDA string give a timestamp.
+#Locate date stamp values and time stamp values. Replace period in timestamp value with a colon. Parse date_time.
 
-Hemisphere_GPS_all$X1 <- gsub("[[:print:]]{1,}>","",Hemisphere_GPS_all$X1)
-Hemisphere_GPS_all$X2 <- gsub("[[:print:]]{1,}>","",Hemisphere_GPS_all$X2)
-
-#Filter out to only the $GPGGA, $GPZDA and $HEHDT strings.
-
-Hemisphere_GPS_all <- filter(Hemisphere_GPS_all, X1 == "$GPGGA" | X1 == "$HEHDT" | X1 == "$GPZDA")
-
-#Located date stamp values and time stamp values in the $GPZDA strings. Parse the date_time. Ignore warnings.
-
-Hemisphere_GPS_all$date <- dmy(paste(Hemisphere_GPS_all$X3,Hemisphere_GPS_all$X4, Hemisphere_GPS_all$X5, sep = "-"))
-Hemisphere_GPS_all$X2 <- as.integer(Hemisphere_GPS_all$X2) #Ignore the warnings here.
-Hemisphere_GPS_all$time <- str_extract(Hemisphere_GPS_all$X2, "\\d{6}")
+Hemisphere_GPS_all$date <- str_extract(Hemisphere_GPS_all$X1, "\\d{8}")
+Hemisphere_GPS_all$time <- str_extract(Hemisphere_GPS_all$X1, "\\d{2}\\:\\d{2}\\.\\d{2}")
+Hemisphere_GPS_all$time <- gsub("\\.",":",Hemisphere_GPS_all$time)
 Hemisphere_GPS_all$date_time <- ymd_hms(paste(Hemisphere_GPS_all$date, Hemisphere_GPS_all$time, sep = " "))
 
-#Impute the time series, before filtering out any values. Set it as an integere before putting back in to original DF, to get rid of
-#milliseconds.
+#Impute the time series, before filtering out any values
 
 full <- na_interpolation(as.numeric(Hemisphere_GPS_all$date_time))
-full <- as.integer(full)
-Hemisphere_GPS_all$date_time <- as.POSIXct(full, origin = "1970-01-01", tz = "UTC") #Standard R origin value
+Hemisphere_GPS_all$date_time <- as.integer(full) #Put it back into the data frame as an integer, for filtering purposes.
 
-#Extract the degrees, minutes and seconds information. Combine to a single value with a space in-between.
+#Remove duplicate values, convert the date_time back to a POSIXct object.
 
-GPS_position <- filter(Hemisphere_GPS_all, X1 == "$GPGGA")
-GPS_position$Lat_deg <- str_extract(GPS_position$X3, "\\d{2}")
-GPS_position$Lat_min <- str_extract(GPS_position$X3, "\\d{2}\\.\\d{5,}")
-GPS_position$Long_deg <- str_extract(GPS_position$X5, "\\d{3}")
-GPS_position$Long_min <- str_extract(GPS_position$X5, "\\d{2}\\.\\d{5,}")
+#Hemisphere_GPS_all <- Hemisphere_GPS_all[!duplicated(Hemisphere_GPS_all$date_time),]
+Hemisphere_GPS_all$date_time <- as.POSIXct(Hemisphere_GPS_all$date_time, origin = "1970-01-01", tz = "UTC") #Standard R origin value
+
+#Remove the time stamp entries from the first column, X1. The regular expressions searches for a "<" character, and substitutes the 
+#next 23 characters that follow it with an empty value. The essentially erases the ASDL time stamp of the form "<20210617 21:19.15:084>".
+Hemisphere_GPS_all$X1 <- sub("^<.{22}","",Hemisphere_GPS_all$X1)
+
+#Filter out the -HDT and -GGA strings from all the remaining records, create seperate dataframes for each of these strings.
+Heading <- Hemisphere_GPS_all[str_detect(Hemisphere_GPS_all$X1, "GPHDT"),]
+GPS_position <- Hemisphere_GPS_all[str_detect(Hemisphere_GPS_all$X1, "GPGGA"),]
+
+#Remove duplicates
+Heading <- Heading[!duplicated(Heading$date_time),]
+GPS_position <- GPS_position[!duplicated(GPS_position$date_time),]
+
+#Extract the heading data
+Heading_split <- str_split_fixed(Heading$X1, ",", n = Inf)
+Heading$Heading <- Heading_split[,2]
+Heading <- Heading[,c(4,5)]
+
+#Extract the degrees, minutes and seconds information from the GGA string. Combine to a single value with a space in-between.
+
+GGA_split <- str_split_fixed(GPS_position$X1, ",", n = )
+GPS_position$Lat_deg <- str_extract(GGA_split[,3], "\\d{2}")
+GPS_position$Lat_min <- str_extract(GGA_split[,3], "\\d{2}\\.\\d{5,}")
+GPS_position$Long_deg <- str_extract(GGA_split[,5], "\\d{3}")
+GPS_position$Long_min <- str_extract(GGA_split[,5], "\\d{2}\\.\\d{5,}")
 GPS_position$Lat <- paste(GPS_position$Lat_deg, GPS_position$Lat_min, sep = " ")
 GPS_position$Long <- paste(GPS_position$Long_deg, GPS_position$Long_min, sep = " ")
 
@@ -351,20 +385,12 @@ GPS_position$Long <- paste(GPS_position$Long_deg, GPS_position$Long_min, sep = "
 GPS_position$Lat <- conv_unit(GPS_position$Lat, "deg_dec_min", "dec_deg")
 GPS_position$Long <- conv_unit(GPS_position$Long, "deg_dec_min", "dec_deg")
 
-#Drop unused columns. Remove milliseconds
+#Drop unused columns. 
 
-GPS_position <- GPS_position[,c(18,23:24)]
-#GPS_position$date_time <- as_datetime(floor(seconds(GPS_position$date_time)))
-
-
-Heading <- filter(Hemisphere_GPS_all, X1 == "$HEHDT")
-Heading <- Heading[,c(18,2)]
-
+GPS_position <- GPS_position[,c(4,9:10)]
 
 #Join the GPS Position and Heading data, remove duplicated timestamp first
 
-GPS_position <- GPS_position[!duplicated(GPS_position$date_time),]
-Heading <- Heading[!duplicated(Heading$date_time),]
 GPS_and_Heading <- left_join(GPS_position, Heading, by = "date_time")
 names(GPS_and_Heading) <- c("date_time","Lat","Long","Heading")
 
@@ -479,36 +505,69 @@ write.csv(Overlay_all, paste(save_dir,"Hypack_Overlay_MasterLog.csv", sep = "/")
 #List files and read into one larger file. This is a comma seperate record, but some files have more columns than others, so need to
 #read in files without comma delimeters to start. Use the semi-colon as a bogus delimeter.
 
-setwd(SBE_dir)
-SBE25_files <- list.files(SBE_dir, pattern = ".asc")
+SBE25_files <- list.files(pattern = "SBE25")
 
-if(length(SBE25_files) != 0)
-{
+#if(length(SBE25_files) != 0)
+#{
 
 for(i in 1:length(SBE25_files))
 {
   name <- as.character(i)
-  assign(name, read_csv(SBE25_files[i]))
+  assign(name, read_delim(SBE25_files[i], col_names = F, delim = ";", col_types = cols(X1 = "c")))
   if(name == "1")
   {SBE25_all <- get(name)
   }else SBE25_all <- bind_rows(SBE25_all, get(name))
   rm(list = c(i))
 }
 
-#Rename column to more R friendly labels, parse date_time.
+#Locate date stamp values and time stamp values. Replace period in timestamp value with a colon. Parse date_time.
 
-names(SBE25_all) <- c("date","time","Lat","Long","Depth_m","Temp_C","Conductivity_msCm","Density_kg_m","Salinity_PSU",
-                      "SoundVelocity_Wilson","Ox_Sat_mlL","SBE43_02Conc","Data_Flag")
-SBE25_all$date_time <- mdy_hms(paste(SBE25_all$date, SBE25_all$time, sep = " "))
+SBE25_all$date <- str_extract(SBE25_all$X1, "\\d{8}")
+SBE25_all$time <- str_extract(SBE25_all$X1, "\\d{2}\\:\\d{2}\\.\\d{2}")
+SBE25_all$time <- gsub("\\.",":",SBE25_all$time)
+SBE25_all$date_time <- ymd_hms(paste(SBE25_all$date, SBE25_all$time, sep = " "))
 
-#Drop columns where depths are less than 1, meaning on deck time. Filter to 1 Hz
+#Impute the time series, before filtering out any values
+
+full <- na_interpolation(as.numeric(SBE25_all$date_time))
+SBE25_all$date_time <- as.integer(full) #Put it back into the data frame as an integer, for filtering purposes.
+
+#Remove duplicate values, convert the date_time back to a POSIXct object.
 
 SBE25_all <- SBE25_all[!duplicated(SBE25_all$date_time),]
+SBE25_all$date_time <- as.POSIXct(SBE25_all$date_time, origin = "1970-01-01", tz = "UTC") #Standard R origin value
+
+#Remove the time stamp entries from the first column, X1. The regular expressions searches for a "<" character, and substitutes the 
+#next 32 characters that follow it with an empty value. The essentially erases the ASDL time stamp of the form "<20210617 21:19.15:084>".
+SBE25_all$X1 <- sub("^<.{32}","",SBE25_all$X1)
+
+#Trim leading whitespace on column X1
+
+SBE25_all$X1 <- str_trim(SBE25_all$X1, side = "left")
+
+#Extract the remaining values into a character matrix, uses the "simplify=TRUE" switch to do this, otherwise it produces a list which
+#is slower to iterate over. The regex expression used below searches for one or more characters (excluding whitespaces) followed by a whitespace,
+#and extracts all matches.
+
+SBESplit <- str_extract_all(SBE25_all$X1, "[[:graph:]]+(?=\\s)", simplify = TRUE)
+
+#Fill in the relevant fields from the columns in the character matrix generate above.
+SBE25_all$Conductivity_msCm <- SBESplit[,2]
+SBE25_all$Temp_C <- SBESplit[,3]
+SBE25_all$Depth_m <- SBESplit[,4]
+SBE25_all$Pressure_dBar <- SBESplit[,5]
+SBE25_all$Ox_Sat_mlL <- SBESplit[,6]
+SBE25_all$SBE43_02Conc <- SBESplit[,7]
+SBE25_all$Salinity_PSU <- SBESplit[,8]
+SBE25_all$SoundVelocity_Wilson <- SBESplit[,10]
+
+#Drop columns where depths are less than 1, meaning on deck time. 
+
 SBE25_all <- filter(SBE25_all, Depth_m > 1)
 
 #Re-arrange columns and write to .CSV
 
-SBE25_all <- SBE25_all[,c(14,3:13)]
+SBE25_all <- SBE25_all[,c(4:12)]
 write.csv(SBE25_all, paste(save_dir, "SBE25_MasterLog.csv", sep ="/"), quote = F, row.names = F)
 
 }

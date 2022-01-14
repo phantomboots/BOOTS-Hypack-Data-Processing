@@ -14,6 +14,13 @@
 ######################################################################################################
 #                                            CHANGE LOG                                              #
 ######################################################################################################
+#
+# Aug 24, 2021: Added loop to add correct UTM Zones to the planned lines data records, removing need to manually enter UTM Zones at the start of processing
+#               for this script.
+#
+#
+#
+######################################################################################################
 
 #Check if necessary packages are present, install as required.
 packages <- c("lubridate","readr","dplyr","stringr","rgdal","geosphere")
@@ -36,25 +43,51 @@ require(geosphere)
 
 ship_name <- "CCGS Tully"
 
+#Project folder name
+
+project_folder <- "~/Projects/June2021_BOOTS_Cruise_PAC2021_036"
+
+#Specify offsets for Ship GPS source. If more than one GPS is used, specify both sources independentely. Offset to the port side are 
+#positive values for 'GPS_abeam' and offset towards the bow are positive for 'GPS_along'.
+
+GPS_abeam <- 6.6
+GPS_along <- -21.13
+
+
+#################################CHECK AND GENERATE DIRECTORIES########################################################
+
+
 #Set working directory for location of Hypack .RAW files
 
-Hypack_input <- "~/Projects/July2019_BOOTS Cruise_PAC2019_014/Data/Hypack Backup/Raw"
+Hypack_input <- paste0(project_folder, "/Data/Hypack_Backup/Raw")
 
 #Directory for processed .CSV files created from "3_QAQC_Interpolated and Smooth Data.R"
 
-imports_dir <- "~/Projects/July2019_BOOTS Cruise_PAC2019_014/Data/NAV_with_CTD"
+imports_dir <- paste0(project_folder, "/Data/NAV_with_CTD")
 
 #Path for .KML files that are created in this script.
 
-KML_path <- "~/Projects//July2019_BOOTS Cruise_PAC2019_014/Data/KML Files"
+KML_path <- paste0(project_folder, "/Data/KML_Files")
 
-#Path for .SHP files that are created in this script.
+#Path for .SHP files that are created in this script.           
 
-SHP_path <- "~/Projects//July2019_BOOTS Cruise_PAC2019_014/Data/Shape Files"
+SHP_path <- paste0(project_folder, "/Data/Shape_Files")
 
-#UTM Zone used in the survey 
 
-UTM_Zone = 8
+#Vector of directories to check for
+
+dirs <- c(Hypack_input, imports_dir, KML_path, SHP_path)
+
+#Check and create directories as needed.
+
+for(i in unique(dirs))
+{
+  if(dir.exists(i) == FALSE)
+  {
+    dir.create(i, recursive = TRUE)
+  }
+}
+
 
 #############################READ IN THE PLANNED LINE COORDINATES AND CONVERT TO LAT/LONG###########################
 
@@ -70,12 +103,20 @@ input_files <- list.files(pattern = ".RAW")
 for(i in 1:length(input_files))
 {
   name <- as.character(i)
-  assign(name, read_delim(input_files[i], delim = " ", skip = 9, col_names = F, n_max = 100,
+  assign(name, read_delim(input_files[i], delim = " ", col_names = F, n_max = 100,
                           col_types = cols(X1 = "c", X2 = "c", X3 = "c"))) #Read in the data strings
-  name <- filter(get(name), X1 =="LNN"| X1 == "PTS") #Filter to line records only.
-  locate <- which(name$X1 == "LNN") #Find the index where LNN is 
-  name$X4[locate-1] <- paste0(name$X2[locate],"_PlannedEnd")
-  name$X4[locate-2] <- paste0(name$X2[locate],"_PlannedStart")
+  name <- filter(get(name), X1 =="LNN"| X1 == "PTS" | X1 == "PRO") #Filter to line records only.
+  name$X4 <- NA
+  name$X5 <- NA
+  name$X6 <- NA
+  locate_line <- which(name$X1 == "LNN") #Find the index where LNN is 
+  locate_UTM <- which(name$X1 == "PRO") #Find the index where PRO is, the line containing information on the prime meridian for each UTM zone.
+  name$X4[locate_line-1] <- paste0(name$X2[locate_line],"_PlannedEnd")
+  name$X4[locate_line-2] <- paste0(name$X2[locate_line],"_PlannedStart")
+  name$X5 <- as.integer(name$X3[locate_UTM])
+  name$X6[name$X5 == -123] <- 10
+  name$X6[name$X5 == -129] <- 9
+  name$X6[name$X5 == -135] <- 8
   if(name == "1")
   {planned_lines <- name
   }else planned_lines <- bind_rows(planned_lines, name)
@@ -93,19 +134,34 @@ planned_lines <- filter(planned_lines, X1 != "LNN")
 planned_lines$X2 <- as.numeric(planned_lines$X2)
 planned_lines$X3 <- as.numeric(planned_lines$X3)
 
+#Add a new column that contains only dive number
+planned_lines$dive_num <- str_extract(planned_lines$X4, "\\w+(?=\\_)") #The regular expression means "find any number of letters & numbers followed by an underscore".
+
+
 #Build Spatial DF to convert from UTM to lat/long. Then convert back to regular DF. Round decimal degree values to 5 decimal places.
 
-coordinates <- planned_lines[,c(2,3)]
-data <- as.data.frame(planned_lines[,c(4)]) #Need to coerce to a DF explicitly, since there is only one column.
-crs <- CRS(paste0("+proj=utm +zone=", UTM_Zone," +datum=WGS84"))
+planned_lines_geographic <- data.frame() #Empty data.frame to fill
 
-planned_lines_DF <- SpatialPointsDataFrame(coords = coordinates, data = data, proj4string = crs)
-planned_lines_DF <- spTransform(planned_lines_DF, CRS("+proj=longlat +datum=WGS84"))
-planned_lines_DF <- as.data.frame(planned_lines_DF)
-names(planned_lines_DF) <- c("Line_Name","Long","Lat")
-planned_lines_DF$Lat <- round(planned_lines_DF$Lat, digits = 5)
-planned_lines_DF$Long <- round(planned_lines_DF$Long, digits =5)
+for(i in unique(planned_lines$dive_num))
+{
+  planned_lines_convert <- filter(planned_lines, dive_num == i) #Filter to rows unique dive number
+  coordinates <- planned_lines_convert[,c(2,3)] #Get the coordinates for this unique dive number
+  data <- as.data.frame(planned_lines_convert[,c(4)]) #Need to coerce to a DF explicitly, since there is only one column.
+  crs <- CRS(paste0("+proj=utm +zone=", planned_lines_convert$X6[1]," +datum=WGS84")) #The column X6 contains the UTM zone number, use the first index number to get a Zone number value.
 
+  planned_lines_DF <- SpatialPointsDataFrame(coords = coordinates, data = data, proj4string = crs)
+  planned_lines_DF <- spTransform(planned_lines_DF, CRS("+proj=longlat +datum=WGS84"))
+  planned_lines_DF <- as.data.frame(planned_lines_DF)
+  names(planned_lines_DF) <- c("Line_Name","Long","Lat")
+  planned_lines_DF$Lat <- round(planned_lines_DF$Lat, digits = 5)
+  planned_lines_DF$Long <- round(planned_lines_DF$Long, digits =5)
+  
+  planned_lines_geographic <- bind_rows(planned_lines_geographic, planned_lines_DF)
+}
+
+#Rename as planned_lines_DF 
+planned_lines_DF <- planned_lines_geographic
+  
 #Remove the "_PlannedEnd" and "_PlannedStart" portions of the planned line names, to faciliate plotting as line features.
 #Remove any NA values as well.
 
@@ -116,7 +172,7 @@ planned_lines_DF$Line_Name <- gsub("_PlannedEnd","", planned_lines_DF$Line_Name)
 
 planned_lines_DF <- planned_lines_DF[which(!is.na(planned_lines_DF$Line_Name)),]
 
-#Set Longitude values to negative, so that they match the sign of other Long/Lat values use later in this script
+#Explicity Set Longitude values to negative, so that they match the sign of other Long/Lat values use later in this script
 
 planned_lines_DF$Long <-  -1*abs(planned_lines_DF$Long)
 
@@ -235,7 +291,7 @@ for(k in unique(Dives))
   name <- get(k)
   title <- gsub(".csv","",k)
   coords <- name[,c(4,3)]  #The Long and lat generated from the LOESS smoothing.
-  data <- name[,c(1:2,5:33)]
+  data <- name[,c(1:2,5:31)]
   crs <- CRS("+proj=longlat +datum=WGS84")
   spdf <- SpatialPointsDataFrame(coords = coords, data = data, proj4string = crs)
   writeOGR(spdf, dsn= SHP_path, layer= paste0(title,"_Points"), driver="ESRI Shapefile", overwrite_layer = T)
